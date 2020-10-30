@@ -9,9 +9,9 @@ apt install mongodb-org awscli jq net-tools -y
 dpkg -i -E ./amazon-cloudwatch-agent.deb
 
 # 2. Populate Instance Metadata
-IR="$(curl -s http://instance-data/latest/dynamic/instance-identity/document | jq -r .region)"
-EC2_INSTANCE_ID="$(curl -s http://instance-data/latest/meta-data/instance-id)"
-EC2_INSTANCE_TYPE="$(curl -s http://instance-data/latest/meta-data/instance-type)"
+IR="$(curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .region)"
+EC2_INSTANCE_ID="$(curl -s http://169.254.169.254/latest/meta-data/instance-id)"
+EC2_INSTANCE_TYPE="$(curl -s http://169.254.169.254/latest/meta-data/instance-type)"
 EC2_INSTANCE_NAME="$(aws ec2 describe-tags --region $IR --filters "Name=resource-id,Values=$EC2_INSTANCE_ID" "Name=key,Values=Name" --query 'Tags[*].Value' --output text)"
 
 # 3. Tag instance notready
@@ -38,7 +38,7 @@ DATA_STATE="unknown"
 
   mkdir -p $${dir}
 
-  if [[ "$${EC2_INSTANCE_TYPE}" =~ t3|c5 ]]; then
+  if [[ "$${EC2_INSTANCE_TYPE}" =~ t3|t4|c5|c6|m5|m6|r5|r6 ]]; then
     VOLUME_ID="$(aws ec2 describe-volumes --region $${IR} --filters Name=attachment.instance-id,Values="$${EC2_INSTANCE_ID}" Name=attachment.device,Values=/dev/$${disc} --query Volumes[].VolumeId --output text)"
     VOLUME_SERIAL="$(echo $VOLUME_ID | sed -e 's/-//g')"
     disc="$(lsblk -o NAME,SERIAL | grep -e $VOLUME_SERIAL | awk '{ print $1 }')"
@@ -57,6 +57,8 @@ DATA_STATE="unknown"
   grep -q "^$(readlink -f /dev/"$${disc}") "$${dir}" " /proc/mounts || mount "$${dir}"
 
 done
+
+hostnamectl set-hostname $${EC2_INSTANCE_NAME}
 
 # 5. Configure and start mongod
 cat << EOF > /etc/mongod.conf
@@ -93,16 +95,21 @@ chown mongodb:mongodb /etc/mongo-key /data/db
 
 systemctl start mongod.service
 systemctl enable mongod.service
-sleep 10 # TODO add check after start to wait for service
 
-# 6. Tag instance ready
+
+# 6. Wait for mongo service and Tag instance ready
+until nc -z 127.0.0.1 27017; do
+    echo "Waiting for mongo service"
+    sleep 1
+done
+
 aws ec2 create-tags --resources $EC2_INSTANCE_ID --tags 'Key=Mongo,Value=ready' --region $IR
 
 
 # 7. Instantiate cluster
 if [[ "$${EC2_INSTANCE_NAME}" == ${instance_name} && "$${IR}" == ${region}  ]]; then
   until [ "$${#INSTANCE_STATUS[@]}" == ${instance_count}  ]; do
-    INSTANCE_STATUS=( $(for r in ${region} ${peered_region}; do aws ec2 describe-instances --filters  'Name=tag:Mongo,Values=ready' 'Name=tag:Name,Values=${name}' --query 'Reservations[*].Instances[*].PrivateIpAddress' --region $r --output text;done))
+    INSTANCE_STATUS=( $(for r in ${region} ${peered_region}; do aws ec2 describe-instances --filters 'Name=instance-state-name,Values=running' 'Name=tag:Mongo,Values=ready' 'Name=tag:Name,Values=${name}' --query 'Reservations[*].Instances[*].Tags[?Key==`Name`].Value[][]' --region $r --output text;done))
       echo "NOT READY"
       sleep 5
   done
@@ -136,6 +143,4 @@ if [[ "$${EC2_INSTANCE_NAME}" == ${instance_name} && "$${IR}" == ${region}  ]]; 
 )'
 fi
 
-# TODO use ssh key, store to parameter store or something?
 # TODO monitoring with collectd or whatever
-# TODO instance naming

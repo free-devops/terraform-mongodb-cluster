@@ -9,6 +9,11 @@ variable "instances_count" {
   type        = map(number)
 }
 
+variable "azs" {
+  description = "Availability zones"
+  type        = map(list(string))
+}
+
 variable "instance_type" {
   description = "The Instance type to launch"
   type        = string
@@ -46,7 +51,7 @@ variable "cidr_blocks" {
 variable "aws_peered_region" {
   description = "Requester AWS Region if cluster is cross-regional"
   type        = string
-  default     = ""
+  default     = "us-east-1"
 }
 
 variable "root_volume_size" {
@@ -106,4 +111,22 @@ variable "environment" {
   description = "Environment"
   type        = string
   default     = "dev"
+}
+
+variable "zone_id" {
+  description = "DNS Zone for auto-dns registration after instance creation"
+  type        = string
+  default     = ""
+}
+
+variable "domain" {
+  description = "Domain to be used for naming"
+  type        = string
+  default     = ""
+}
+
+variable "num_suffix_format" {
+  description = "Numerical suffix format used as the volume and EC2 instance name suffix"
+  type        = string
+  default     = "-%d"
 }
